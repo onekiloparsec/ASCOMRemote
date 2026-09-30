@@ -1185,7 +1185,7 @@ namespace ASCOM.Remote
                 IPEndPoint localIpEndPoint = (IPEndPoint)udpClient.Client.LocalEndPoint;
 
                 // Filter based on receiving port IP address 
-                if ((ServerIPAddressString == SharedConstants.BIND_TO_ALL_INTERFACES_IP_ADDRESS_STRONG) | (ServerIPAddressString == SharedConstants.BIND_TO_ALL_INTERFACES_IP_ADDRESS_STRONG)) // The Remote Server is configured to respond on all its IP addresses so filtering is not required here
+                if ((ServerIPAddressString == SharedConstants.BIND_TO_ALL_INTERFACES_IP_ADDRESS_STRONG) | (ServerIPAddressString == SharedConstants.BIND_TO_ALL_INTERFACES_IP_ADDRESS_WEAK)) // The Remote Server is configured to respond on all its IP addresses so filtering is not required here
                 {
                     if (DebugTraceState) LogMessage((uint)discoveryNumber, 0, 0, "DiscoveryCallback", $"The configured server IP address is + or * so we will process this request.");
                 }
