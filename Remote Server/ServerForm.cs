@@ -2539,12 +2539,14 @@ namespace ASCOM.Remote
             if ((localIpEndPoint.AddressFamily == AddressFamily.InterNetworkV6) & (!IpV6Enabled))
             {
                 if (DebugTraceState) LogMessage1(requestData, "APIRequestCallback", $"IPv6 is not enabled on the remote server, this request will be dropped.");
+                context.Response.Abort(); // Close the connection so that the client is not left waiting for a response that will never be sent
                 return;
             }
 
             if ((localIpEndPoint.AddressFamily == AddressFamily.InterNetwork) & (!IpV4Enabled))
             {
                 if (DebugTraceState) LogMessage1(requestData, "APIRequestCallback", $"IPv4 is not enabled on the remote server, this request will be dropped.");
+                context.Response.Abort(); // Close the connection so that the client is not left waiting for a response that will never be sent
                 return;
             }
 
@@ -2561,7 +2563,7 @@ namespace ASCOM.Remote
                 if (localIpEndPoint.ToString() != new IPEndPoint(IPAddress.Parse(ServerIPAddressString), (int)ServerPortNumber).ToString()) // IP Addresses don't match so we just ignore the request
                 {
                     if (DebugTraceState) LogMessage1(requestData, "APIRequestCallback", $"  The endpoint is NOT enabled - This request will be dropped.");
-
+                    context.Response.Abort(); // Close the connection so that the client is not left waiting for a response that will never be sent
                     return;
                 }
                 else // IP addresses do match so we can process this request
