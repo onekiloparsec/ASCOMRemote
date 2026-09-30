@@ -88,7 +88,15 @@ namespace ASCOM.Remote
 
         void ProcessCommand(object requestData)
         {
-            restServer.ProcessDriverCommand((RequestData)requestData);
+            try
+            {
+                restServer.ProcessDriverCommand((RequestData)requestData);
+            }
+            catch (Exception ex) // This runs on a dedicated thread, so an exception that escapes from here would close down the whole Remote Server
+            {
+                ServerForm.LogException1((RequestData)requestData, "ProcessCommand", ex.ToString());
+                try { ServerForm.Return500Error((RequestData)requestData, $"Internal server error (ProcessCommand): {ex}"); } catch { } // The response may no longer be usable
+            }
         }
 
         /// <summary>
