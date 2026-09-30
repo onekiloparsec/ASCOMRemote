@@ -3054,15 +3054,15 @@ namespace ASCOM.Remote
                                     requestData.DeviceKey = deviceKey; // Save the device key for use throughout the remainder of the application
 
                                     // Check whether the device is configured on the Remote Server
-                                    if (ActiveObjects.ContainsKey(deviceKey)) // Device is configured on the server, now check whether it initialised OK
+                                    if (ActiveObjects.TryGetValue(deviceKey, out ActiveObject requestedDevice)) // Device is configured on the server, now check whether it initialised OK
                                     {
-                                        if (ActiveObjects[deviceKey].InitialisedOk) // The device did initialise OK
+                                        if (requestedDevice.InitialisedOk) // The device did initialise OK
                                         {
                                             // Test whether this device is configured for concurrent request processing
                                             // If not permitted, wait until we get a lock on the device's synchronisation lock object, otherwise continue without waiting
-                                            if (!ActiveObjects[deviceKey].AllowConcurrentAccess) // Concurrent processing is not permitted so wait for the synchronisation lock
+                                            if (!requestedDevice.AllowConcurrentAccess) // Concurrent processing is not permitted so wait for the synchronisation lock
                                             {
-                                                Monitor.Enter(ActiveObjects[deviceKey].CommandLock);
+                                                Monitor.Enter(requestedDevice.CommandLock);
                                                 if (DebugTraceState) LogMessage1(requestData, requestData.Elements[SharedConstants.URL_ELEMENT_METHOD], $"Device only supports serialised access - command lock acquired for device {deviceKey} on REST thread {Environment.CurrentManagedThreadId}");
                                             }  // Concurrent processing is not enabled 
                                             else
@@ -3080,9 +3080,9 @@ namespace ASCOM.Remote
                                                 if (RunDriversOnSeparateThreads) // Each driver is running in its own Form with its own message loop
                                                 {
                                                     LogMessage1(requestData, requestData.Elements[SharedConstants.URL_ELEMENT_METHOD], $"ProcessRequestAsync - Sending command to {deviceKey} on REST thread {Environment.CurrentManagedThreadId}");
-                                                    DriverCommandDelegate driverCommandDelegate = new(ActiveObjects[deviceKey].DriverHostForm.DriverCommand); // Create a delegate for this request
+                                                    DriverCommandDelegate driverCommandDelegate = new(requestedDevice.DriverHostForm.DriverCommand); // Create a delegate for this request
 
-                                                    Thread driverThread = (Thread)ActiveObjects[deviceKey].DriverHostForm.Invoke(driverCommandDelegate, requestData); // Send the command to the host form, which will return a thread where the command is running
+                                                    Thread driverThread = (Thread)requestedDevice.DriverHostForm.Invoke(driverCommandDelegate, requestData); // Send the command to the host form, which will return a thread where the command is running
 
                                                     if (driverThread != null) // A thread was returned so wait for it to complete
                                                     {
@@ -3102,9 +3102,9 @@ namespace ASCOM.Remote
                                             }
                                             finally // Ensure that the command lock is released if set
                                             {
-                                                if (!ActiveObjects[deviceKey].AllowConcurrentAccess)
+                                                if (!requestedDevice.AllowConcurrentAccess)
                                                 {
-                                                    Monitor.Exit(ActiveObjects[deviceKey].CommandLock); // Release the command lock object if a lock was used
+                                                    Monitor.Exit(requestedDevice.CommandLock); // Release the command lock object if a lock was used
                                                     if (DebugTraceState) LogMessage1(requestData, requestData.Elements[SharedConstants.URL_ELEMENT_METHOD], $"Device only supports serialised access - command lock released for device {deviceKey} from REST thread {Environment.CurrentManagedThreadId}");
                                                 } // Concurrent access is not enabled so release the synchronisation lock obtained earlier
                                                 else // Specified is configured but threw an error when created or when Connected was set True so return the error message
@@ -3115,7 +3115,7 @@ namespace ASCOM.Remote
                                         } // The device did initialise OK
                                         else // Specified is configured but threw an error when created or when Connected was set True so return the error message
                                         {
-                                            Return400Error(requestData, $"Device {deviceKey} did not start correctly and is unavailable: {ActiveObjects[deviceKey].InitialisationErrorMessage}");
+                                            Return400Error(requestData, $"Device {deviceKey} did not start correctly and is unavailable: {requestedDevice.InitialisationErrorMessage}");
                                         } // Handle cases where the device did not initialise correctly
                                     } // OK, we have a valid device
                                     else // Specified device is not configured so return an error message
