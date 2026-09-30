@@ -216,6 +216,7 @@ namespace ASCOM.Remote
         // Run driver in separate thread constants
         internal const int DESTROY_DRIVER = int.MinValue;
         internal const int ASYNC_WAIT_LOOP_TIME = 20; // Number of milliseconds to wait for work before timing out and going round the wait loop to run Application.DoEvents()
+        internal const int DRIVER_CREATION_TIMEOUT = 60000; // Number of milliseconds to wait for a driver to be created and connected on its own thread before moving on to the next device
 
         [GeneratedRegex("[^\\u0020-\\u007E]")]
         private static partial Regex AsciiRegex();
@@ -1105,13 +1106,25 @@ namespace ASCOM.Remote
 
                                     string deviceKey = $"{configuredDevice.Value.DeviceType.ToLowerInvariant()}/{configuredDevice.Value.DeviceNumber}";
 
+                                    // Wait for the driver to be created and connected, but not for ever, so that a driver that hangs cannot prevent the remaining devices from being created
+                                    Stopwatch driverCreationTimer = Stopwatch.StartNew();
                                     do
                                     {
                                         Thread.Sleep(50);
                                         Application.DoEvents();
-                                    } while (ActiveObjects[deviceKey].DriverHostForm == null);
+                                    } while ((ActiveObjects[deviceKey].DriverHostForm == null) & (driverCreationTimer.ElapsedMilliseconds < DRIVER_CREATION_TIMEOUT));
 
-                                    LogMessage(0, 0, 0, "ConnectDevices", $"Completed create driver delegate for {configuredDevice.Value.ProgID} on thread {Environment.CurrentManagedThreadId}");
+                                    if (ActiveObjects[deviceKey].DriverHostForm == null) // The driver has not finished initialising within the timeout
+                                    {
+                                        string timeoutMessage = $"Device {configuredDevice.Value.ProgID} has not finished connecting after {DRIVER_CREATION_TIMEOUT / 1000} seconds. It is unavailable unless it completes later.";
+                                        ActiveObjects[deviceKey].InitialisationErrorMessage = timeoutMessage;
+                                        LogMessage(0, 0, 0, "ConnectDevices", timeoutMessage);
+                                        LogToScreen($"ERROR - {timeoutMessage}");
+                                    }
+                                    else // The driver was created within the timeout
+                                    {
+                                        LogMessage(0, 0, 0, "ConnectDevices", $"Completed create driver delegate for {configuredDevice.Value.ProgID} on thread {Environment.CurrentManagedThreadId}");
+                                    }
                                 }
                                 else
                                 {
