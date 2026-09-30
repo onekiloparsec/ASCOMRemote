@@ -216,6 +216,7 @@ namespace ASCOM.Remote
         // Run driver in separate thread constants
         internal const int DESTROY_DRIVER = int.MinValue;
         internal const int ASYNC_WAIT_LOOP_TIME = 20; // Number of milliseconds to wait for work before timing out and going round the wait loop to run Application.DoEvents()
+        internal const int DRIVER_CREATION_TIMEOUT = 60000; // Number of milliseconds to wait for a driver to be created and connected on its own thread before moving on to the next device
 
         [GeneratedRegex("[^\\u0020-\\u007E]")]
         private static partial Regex AsciiRegex();
@@ -1105,13 +1106,25 @@ namespace ASCOM.Remote
 
                                     string deviceKey = $"{configuredDevice.Value.DeviceType.ToLowerInvariant()}/{configuredDevice.Value.DeviceNumber}";
 
+                                    // Wait for the driver to be created and connected, but not for ever, so that a driver that hangs cannot prevent the remaining devices from being created
+                                    Stopwatch driverCreationTimer = Stopwatch.StartNew();
                                     do
                                     {
                                         Thread.Sleep(50);
                                         Application.DoEvents();
-                                    } while (ActiveObjects[deviceKey].DriverHostForm == null);
+                                    } while ((ActiveObjects[deviceKey].DriverHostForm == null) & (driverCreationTimer.ElapsedMilliseconds < DRIVER_CREATION_TIMEOUT));
 
-                                    LogMessage(0, 0, 0, "ConnectDevices", $"Completed create driver delegate for {configuredDevice.Value.ProgID} on thread {Environment.CurrentManagedThreadId}");
+                                    if (ActiveObjects[deviceKey].DriverHostForm == null) // The driver has not finished initialising within the timeout
+                                    {
+                                        string timeoutMessage = $"Device {configuredDevice.Value.ProgID} has not finished connecting after {DRIVER_CREATION_TIMEOUT / 1000} seconds. It is unavailable unless it completes later.";
+                                        ActiveObjects[deviceKey].InitialisationErrorMessage = timeoutMessage;
+                                        LogMessage(0, 0, 0, "ConnectDevices", timeoutMessage);
+                                        LogToScreen($"ERROR - {timeoutMessage}");
+                                    }
+                                    else // The driver was created within the timeout
+                                    {
+                                        LogMessage(0, 0, 0, "ConnectDevices", $"Completed create driver delegate for {configuredDevice.Value.ProgID} on thread {Environment.CurrentManagedThreadId}");
+                                    }
                                 }
                                 else
                                 {
@@ -1185,7 +1198,7 @@ namespace ASCOM.Remote
                 IPEndPoint localIpEndPoint = (IPEndPoint)udpClient.Client.LocalEndPoint;
 
                 // Filter based on receiving port IP address 
-                if ((ServerIPAddressString == SharedConstants.BIND_TO_ALL_INTERFACES_IP_ADDRESS_STRONG) | (ServerIPAddressString == SharedConstants.BIND_TO_ALL_INTERFACES_IP_ADDRESS_STRONG)) // The Remote Server is configured to respond on all its IP addresses so filtering is not required here
+                if ((ServerIPAddressString == SharedConstants.BIND_TO_ALL_INTERFACES_IP_ADDRESS_STRONG) | (ServerIPAddressString == SharedConstants.BIND_TO_ALL_INTERFACES_IP_ADDRESS_WEAK)) // The Remote Server is configured to respond on all its IP addresses so filtering is not required here
                 {
                     if (DebugTraceState) LogMessage((uint)discoveryNumber, 0, 0, "DiscoveryCallback", $"The configured server IP address is + or * so we will process this request.");
                 }
@@ -1633,8 +1646,9 @@ namespace ASCOM.Remote
                 // Invoke the code on the UI thread if required
                 if (txtLog.InvokeRequired)
                 {
+                    // BeginInvoke is used so that the calling thread never waits for the UI thread, which may be busy connecting or disconnecting a driver
                     SetTextCallback logToScreenDelegate = new(LogToScreen);
-                    this.Invoke(logToScreenDelegate, screenMessage);
+                    this.BeginInvoke(logToScreenDelegate, screenMessage);
                 }
                 else
                 {
@@ -1652,28 +1666,29 @@ namespace ASCOM.Remote
 
         private void IncrementConcurrencyCounter()
         {
-            if (txtConcurrency.InvokeRequired)
-            {
-                SetConcurrencyCallback d = new(IncrementConcurrencyCounter);
-                this.Invoke(d, []);
-            }
-            else
-            {
-                Interlocked.Increment(ref numberOfConcurrentTransactions); // Increment the concurrent transaction counter in a thread safe manner
-                txtConcurrency.Text = numberOfConcurrentTransactions.ToString();
-            }
+            Interlocked.Increment(ref numberOfConcurrentTransactions); // Increment the concurrent transaction counter in a thread safe manner
+            DisplayConcurrencyCounter();
         }
 
         internal void DecrementConcurrencyCounter()
         {
-            if (this.txtConcurrency.InvokeRequired)
+            Interlocked.Decrement(ref numberOfConcurrentTransactions); // Decrement the concurrent transaction counter in a thread safe manner
+            DisplayConcurrencyCounter();
+        }
+
+        /// <summary>
+        /// Show the current number of concurrent transactions on the form
+        /// </summary>
+        /// <remarks>BeginInvoke is used so that request threads never wait for the UI thread, which may be busy connecting or disconnecting a driver.</remarks>
+        private void DisplayConcurrencyCounter()
+        {
+            if (txtConcurrency.InvokeRequired)
             {
-                SetConcurrencyCallback decrementConcurrencyCounterDelegate = new(DecrementConcurrencyCounter);
-                this.Invoke(decrementConcurrencyCounterDelegate, []);
+                SetConcurrencyCallback displayConcurrencyCounterDelegate = new(DisplayConcurrencyCounter);
+                this.BeginInvoke(displayConcurrencyCounterDelegate);
             }
             else
             {
-                Interlocked.Decrement(ref numberOfConcurrentTransactions); // Decrement the concurrent transaction counter in a thread safe manner
                 txtConcurrency.Text = numberOfConcurrentTransactions.ToString();
             }
         }
@@ -2539,12 +2554,14 @@ namespace ASCOM.Remote
             if ((localIpEndPoint.AddressFamily == AddressFamily.InterNetworkV6) & (!IpV6Enabled))
             {
                 if (DebugTraceState) LogMessage1(requestData, "APIRequestCallback", $"IPv6 is not enabled on the remote server, this request will be dropped.");
+                context.Response.Abort(); // Close the connection so that the client is not left waiting for a response that will never be sent
                 return;
             }
 
             if ((localIpEndPoint.AddressFamily == AddressFamily.InterNetwork) & (!IpV4Enabled))
             {
                 if (DebugTraceState) LogMessage1(requestData, "APIRequestCallback", $"IPv4 is not enabled on the remote server, this request will be dropped.");
+                context.Response.Abort(); // Close the connection so that the client is not left waiting for a response that will never be sent
                 return;
             }
 
@@ -2561,7 +2578,7 @@ namespace ASCOM.Remote
                 if (localIpEndPoint.ToString() != new IPEndPoint(IPAddress.Parse(ServerIPAddressString), (int)ServerPortNumber).ToString()) // IP Addresses don't match so we just ignore the request
                 {
                     if (DebugTraceState) LogMessage1(requestData, "APIRequestCallback", $"  The endpoint is NOT enabled - This request will be dropped.");
-
+                    context.Response.Abort(); // Close the connection so that the client is not left waiting for a response that will never be sent
                     return;
                 }
                 else // IP addresses do match so we can process this request
@@ -3054,15 +3071,15 @@ namespace ASCOM.Remote
                                     requestData.DeviceKey = deviceKey; // Save the device key for use throughout the remainder of the application
 
                                     // Check whether the device is configured on the Remote Server
-                                    if (ActiveObjects.ContainsKey(deviceKey)) // Device is configured on the server, now check whether it initialised OK
+                                    if (ActiveObjects.TryGetValue(deviceKey, out ActiveObject requestedDevice)) // Device is configured on the server, now check whether it initialised OK
                                     {
-                                        if (ActiveObjects[deviceKey].InitialisedOk) // The device did initialise OK
+                                        if (requestedDevice.InitialisedOk) // The device did initialise OK
                                         {
                                             // Test whether this device is configured for concurrent request processing
                                             // If not permitted, wait until we get a lock on the device's synchronisation lock object, otherwise continue without waiting
-                                            if (!ActiveObjects[deviceKey].AllowConcurrentAccess) // Concurrent processing is not permitted so wait for the synchronisation lock
+                                            if (!requestedDevice.AllowConcurrentAccess) // Concurrent processing is not permitted so wait for the synchronisation lock
                                             {
-                                                Monitor.Enter(ActiveObjects[deviceKey].CommandLock);
+                                                Monitor.Enter(requestedDevice.CommandLock);
                                                 if (DebugTraceState) LogMessage1(requestData, requestData.Elements[SharedConstants.URL_ELEMENT_METHOD], $"Device only supports serialised access - command lock acquired for device {deviceKey} on REST thread {Environment.CurrentManagedThreadId}");
                                             }  // Concurrent processing is not enabled 
                                             else
@@ -3080,9 +3097,9 @@ namespace ASCOM.Remote
                                                 if (RunDriversOnSeparateThreads) // Each driver is running in its own Form with its own message loop
                                                 {
                                                     LogMessage1(requestData, requestData.Elements[SharedConstants.URL_ELEMENT_METHOD], $"ProcessRequestAsync - Sending command to {deviceKey} on REST thread {Environment.CurrentManagedThreadId}");
-                                                    DriverCommandDelegate driverCommandDelegate = new(ActiveObjects[deviceKey].DriverHostForm.DriverCommand); // Create a delegate for this request
+                                                    DriverCommandDelegate driverCommandDelegate = new(requestedDevice.DriverHostForm.DriverCommand); // Create a delegate for this request
 
-                                                    Thread driverThread = (Thread)ActiveObjects[deviceKey].DriverHostForm.Invoke(driverCommandDelegate, requestData); // Send the command to the host form, which will return a thread where the command is running
+                                                    Thread driverThread = (Thread)requestedDevice.DriverHostForm.Invoke(driverCommandDelegate, requestData); // Send the command to the host form, which will return a thread where the command is running
 
                                                     if (driverThread != null) // A thread was returned so wait for it to complete
                                                     {
@@ -3102,9 +3119,9 @@ namespace ASCOM.Remote
                                             }
                                             finally // Ensure that the command lock is released if set
                                             {
-                                                if (!ActiveObjects[deviceKey].AllowConcurrentAccess)
+                                                if (!requestedDevice.AllowConcurrentAccess)
                                                 {
-                                                    Monitor.Exit(ActiveObjects[deviceKey].CommandLock); // Release the command lock object if a lock was used
+                                                    Monitor.Exit(requestedDevice.CommandLock); // Release the command lock object if a lock was used
                                                     if (DebugTraceState) LogMessage1(requestData, requestData.Elements[SharedConstants.URL_ELEMENT_METHOD], $"Device only supports serialised access - command lock released for device {deviceKey} from REST thread {Environment.CurrentManagedThreadId}");
                                                 } // Concurrent access is not enabled so release the synchronisation lock obtained earlier
                                                 else // Specified is configured but threw an error when created or when Connected was set True so return the error message
@@ -3115,7 +3132,7 @@ namespace ASCOM.Remote
                                         } // The device did initialise OK
                                         else // Specified is configured but threw an error when created or when Connected was set True so return the error message
                                         {
-                                            Return400Error(requestData, $"Device {deviceKey} did not start correctly and is unavailable: {ActiveObjects[deviceKey].InitialisationErrorMessage}");
+                                            Return400Error(requestData, $"Device {deviceKey} did not start correctly and is unavailable: {requestedDevice.InitialisationErrorMessage}");
                                         } // Handle cases where the device did not initialise correctly
                                     } // OK, we have a valid device
                                     else // Specified device is not configured so return an error message
