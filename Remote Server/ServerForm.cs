@@ -1633,8 +1633,9 @@ namespace ASCOM.Remote
                 // Invoke the code on the UI thread if required
                 if (txtLog.InvokeRequired)
                 {
+                    // BeginInvoke is used so that the calling thread never waits for the UI thread, which may be busy connecting or disconnecting a driver
                     SetTextCallback logToScreenDelegate = new(LogToScreen);
-                    this.Invoke(logToScreenDelegate, screenMessage);
+                    this.BeginInvoke(logToScreenDelegate, screenMessage);
                 }
                 else
                 {
@@ -1652,28 +1653,29 @@ namespace ASCOM.Remote
 
         private void IncrementConcurrencyCounter()
         {
-            if (txtConcurrency.InvokeRequired)
-            {
-                SetConcurrencyCallback d = new(IncrementConcurrencyCounter);
-                this.Invoke(d, []);
-            }
-            else
-            {
-                Interlocked.Increment(ref numberOfConcurrentTransactions); // Increment the concurrent transaction counter in a thread safe manner
-                txtConcurrency.Text = numberOfConcurrentTransactions.ToString();
-            }
+            Interlocked.Increment(ref numberOfConcurrentTransactions); // Increment the concurrent transaction counter in a thread safe manner
+            DisplayConcurrencyCounter();
         }
 
         internal void DecrementConcurrencyCounter()
         {
-            if (this.txtConcurrency.InvokeRequired)
+            Interlocked.Decrement(ref numberOfConcurrentTransactions); // Decrement the concurrent transaction counter in a thread safe manner
+            DisplayConcurrencyCounter();
+        }
+
+        /// <summary>
+        /// Show the current number of concurrent transactions on the form
+        /// </summary>
+        /// <remarks>BeginInvoke is used so that request threads never wait for the UI thread, which may be busy connecting or disconnecting a driver.</remarks>
+        private void DisplayConcurrencyCounter()
+        {
+            if (txtConcurrency.InvokeRequired)
             {
-                SetConcurrencyCallback decrementConcurrencyCounterDelegate = new(DecrementConcurrencyCounter);
-                this.Invoke(decrementConcurrencyCounterDelegate, []);
+                SetConcurrencyCallback displayConcurrencyCounterDelegate = new(DisplayConcurrencyCounter);
+                this.BeginInvoke(displayConcurrencyCounterDelegate);
             }
             else
             {
-                Interlocked.Decrement(ref numberOfConcurrentTransactions); // Decrement the concurrent transaction counter in a thread safe manner
                 txtConcurrency.Text = numberOfConcurrentTransactions.ToString();
             }
         }
